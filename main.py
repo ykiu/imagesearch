@@ -11,14 +11,25 @@ from PIL.ImageStat import Stat
 from tqdm import tqdm
 
 
+ANGLES = [90, 180, 270]
+
+
 def meandiff(image1: ImageFile, image2: ImageFile) -> float:
     return float(mean(Stat(difference(image1, image2)).mean))
 
 
+def resize_to_fit(image: ImageFile, size: int) -> ImageFile:
+    rate = size / max(image.width, image.height)
+    new_image = image.resize((int(image.width * rate), int(image.height * rate)))
+    return new_image
+
+
+def rotate_to_multiple_angles(image: ImageFile) -> List[ImageFile]:
+    return [image] + [image.rotate(angle, expand=True) for angle in ANGLES]
+
+
 class ImageGroup:
-    def __init__(
-        self, paths: Sequence[str], size: Tuple[int, int], verbose: bool
-    ) -> None:
+    def __init__(self, paths: Sequence[str], size: int, verbose: bool, rotate) -> None:
         self.size = size
         self.verbose = verbose
         if self.verbose:
@@ -26,7 +37,16 @@ class ImageGroup:
             it = tqdm(paths)
         else:
             it = paths
-        self.images = [(path, Image.open(path).resize(size)) for path in it]
+        resized_images = [(path, resize_to_fit(Image.open(path), size)) for path in it]
+        if rotate:
+            rotated_images = [
+                (path, rotated_image)
+                for path, image in resized_images
+                for rotated_image in rotate_to_multiple_angles(image)
+            ]
+            self.images = rotated_images
+        else:
+            self.images = resized_images
 
     def __iter__(self) -> Iterator[ImageFile]:
         return iter(self.images)
@@ -54,16 +74,15 @@ def main(
     pattern1: str,
     pattern2: str,
     outpath: str,
-    width: int,
-    height: int,
+    size: int,
+    rotate: bool,
     threshold: int,
     verbose: bool,
 ) -> None:
     paths1 = glob(pattern1)
     paths2 = glob(pattern2)
-    size = (width, height)
-    grp1 = ImageGroup(paths1, size, verbose)
-    grp2 = ImageGroup(paths2, size, verbose)
+    grp1 = ImageGroup(paths1, size, verbose, False)
+    grp2 = ImageGroup(paths2, size, verbose, rotate)
     similar_images = grp1.lookup(grp2, threshold)
     with open(outpath, "w", encoding="utf8") as fp:
         json.dump(similar_images, fp)
@@ -92,25 +111,27 @@ parser.add_argument(
     "outpath", type=str, help="The name of the json file to write the result to."
 )
 parser.add_argument(
-    "--width",
+    "--size",
     type=int,
-    default=10,
-    help="The images would be normalized to this width (px). Defaults to 10px.",
+    default=100,
+    help="The images would be normalized to this size (px). Defaults to 100px.",
 )
 parser.add_argument(
-    "--height",
-    type=int,
-    default=10,
-    help="The images would be normalized to this height (px). Defaults to 10px.",
+    "--rotate",
+    action="store_true",
+    help=(
+        "Rotate images by 90°, 180° and 270° before comparison. "
+        "Usefull when thumbnails are rotated whereas the original images are not."
+    ),
 )
 parser.add_argument(
     "--threshold",
     type=int,
-    default=20,
+    default=30,
     help=(
         "The images would be considered 'the same' "
         "if the mean difference of the pixel values is below this threshold. "
-        "Defaults to 20."
+        "Defaults to 30."
     ),
 )
 parser.add_argument("--verbose", action="store_true", help="Display progress bars.")
